@@ -1,0 +1,4 @@
+playwright==1.62.0
+browser-use
+# 预留：阿里云通义千问 SDK（启用 LLM 兜底时取消注释）
+# openai>=1.0

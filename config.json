@@ -1,0 +1,64 @@
+{
+  "app": {
+    "name": "starmerx_listing",
+    "base_url": "https://op.starmerx.com/#/",
+    "login_url": "https://passport.starmerx.com/login",
+    "storage_state": "runtime/storage_state.json",
+    "headless": false,
+    "slow_mo": 100,
+    "viewport": { "width": 1600, "height": 1000 }
+  },
+  "login": {
+    "mode": "dingtalk_qr",
+    "qr_timeout_sec": 300,
+    "storage_state_max_age_hours": 48
+  },
+  "product_pool": {
+    "url": "https://op.starmerx.com/#/sale-manage/my-product",
+    "region_tab": "美区产品池",
+    "channel": "多渠道",
+    "category_leaf": "圣诞节花环",
+    "escape_after_select": true
+  },
+  "plan": {
+    "platform": "Tik Tok",
+    "site": "tiktok.com",
+    "store": "Garvee Mate",
+    "brand": "无品牌",
+    "category_language": "",
+    "product_category_platform": "Wreaths, Garlands & Swags",
+    "margin_rate": 0.40,
+    "join_mode": "按SKU加入",
+    "generate_mode": "按SPU维度生成多个上架计划",
+    "gtin": "豁免",
+    "auto_copywrite": true,
+    "auto_image": true
+  },
+  "category": {
+    "system_path": ["家居、厨具、家装", "节日饰品", "圣诞花环、花带装饰和垂花饰", "圣诞节花环"],
+    "platform_path": ["Home Supplies", "Festive & Party Supplies", "Festive Decorations", "Wreaths, Garlands & Swags"]
+  },
+  "verification": {
+    "spu_image_count": 8,
+    "main_image_white_bg": true,
+    "activity_marketing_rate": 0.50,
+    "personal_profit_min": 0.04,
+    "personal_profit_max": 0.06,
+    "margin_adjust_min": 0.05,
+    "margin_adjust_max": 0.60
+  },
+  "safety": {
+    "dry_run": true,
+    "max_sku_count": 1,
+    "require_confirm_before_listing": true,
+    "max_profit_iterations": 20,
+    "pool_record_threshold": 5000
+  },
+  "llm": {
+    "provider": "aliyun_dashscope",
+    "model": "qwen-plus",
+    "api_key_env": "DASHSCOPE_API_KEY",
+    "use_llm_fallback": true,
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  }
+}
