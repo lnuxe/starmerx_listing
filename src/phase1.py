@@ -451,8 +451,10 @@ def _fill_plan_form(page, config: dict) -> None:
                             });
                         if (n) {
                             const r = n.getBoundingClientRect();
-                            const isLeaf = n.classList.contains('is-leaf')
-                                || !!n.querySelector('.el-cascader-node__postfix');
+                            // 叶子 = 无展开箭头/postfix 且无 is-expandable（Element Plus 语义）
+                            const isLeaf = !n.querySelector('.el-cascader-node__postfix, '
+                                + '.el-cascader-node__arrow')
+                                && !n.classList.contains('is-expandable');
                             return {x: Math.round(r.x + r.width / 2),
                                     y: Math.round(r.y + r.height / 2), isLeaf};
                         }
@@ -725,8 +727,35 @@ def _fill_plan_form(page, config: dict) -> None:
                     log(f"[phase1][form] ⚠ 类目第{depth + 1}级「{label}」未找到，中止")
                 _close_cascader_panel(page)
                 return False
-            page.mouse.click(node["x"], node["y"])
-            page.wait_for_timeout(500)
+            # 优先 element click（scrollIntoView 可命中滚动/被遮挡节点），失败坐标兜底
+            el_ok = False
+            try:
+                el_ok = page.evaluate(
+                    """(label) => {
+                        const menus = [...document.querySelectorAll('.el-cascader-menu')]
+                            .filter(m => { const r = m.getBoundingClientRect();
+                                           return r.width > 0 && r.height > 0; });
+                        for (const m of menus) {
+                            const n = [...m.querySelectorAll('.el-cascader-node')].find(x => {
+                                const t = (x.querySelector('.el-cascader-node__label') || x)
+                                    .innerText.replace(/\\s+/g, ' ').trim();
+                                return t === label;
+                            });
+                            if (n) {
+                                n.scrollIntoView({block: 'center'});
+                                n.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""",
+                    label,
+                )
+            except Exception:
+                el_ok = False
+            if not el_ok:
+                page.mouse.click(node["x"], node["y"])
+            page.wait_for_timeout(600)
             # 叶子节点点击后会收起面板并回填，无需等待下一级菜单
             if node["isLeaf"]:
                 break
