@@ -200,11 +200,15 @@ _JS_HAS_MAIN_TABLE = """() => {
 
 
 def _snap_row0(page) -> dict:
-    """读取主表首行：公司利润率输入框值 + 个人利润率% + 活动营销费占比%。
+    """读取主表首行关键字段（按列头标题动态定位，colid 会随 SKU 变体数漂移）。
 
-    同时给两个关键输入框打 id 标记：
-      - inputs[2] = 公司利润率 → `__margin2__`
-      - inputs[4] = 活动营销费占比 → `__mkt_fee__`
+    真实 DOM（2026-08-27 勘察确认）：
+      - 公司利润率 input  = 列头「利润($)/利润率」对应 td 的 input，填百分比，suffix %
+      - 活动营销费 input  = 列头「活动营销费($) / 占比」对应 td 的 input，suffix %
+      - 个人利润率        = 「利润($)/利润率」cell 文本内「个人: <金额> <Y%>」里的 Y
+
+    注意：colid 不固定（SPU#3=col_58/69，SPU#4=col_100/111，因竞品参照列数量不同
+    而偏移），必须用列头标题反查 colid，不能硬编码。
     """
     return page.evaluate(
         """() => {
@@ -213,40 +217,70 @@ def _snap_row0(page) -> dict:
                 .filter(r => r.offsetParent !== null || r.getBoundingClientRect().width > 0);
             const root = roots.find(r => (r.innerText||'').includes('保存算价')) || roots[0];
             if (!root) return { note: 'no drawer' };
-            for (const tb of root.querySelectorAll('.vxe-table, table')) {
-                const heads = [...tb.querySelectorAll('.vxe-header-column .vxe-cell, th')]
-                    .map(h => (h.innerText||'').trim()).filter(Boolean);
-                if (!(heads.includes('利润($)/利润率')
-                    && heads.includes('活动营销费($) / 占比'))) continue;
-                const rows = [...tb.querySelectorAll('.vxe-body--row, tr.vxe-row, tbody tr')]
-                    .filter(r => r.offsetParent !== null);
-                if (!rows.length) return { note: 'no rows' };
-                const inputs = [...rows[0].querySelectorAll('input')]
-                    .filter(e => e.offsetParent !== null);
-                if (inputs.length < 5) return { note: 'few inputs', n: inputs.length };
-                const inp = inputs[2];
-                const fee = inputs[4];
-                inp.id = '__margin2__';
-                fee.id = '__mkt_fee__';
-                const margin = parseFloat(inp.value);
-                const mkt_fee = parseFloat(fee.value);
-                // 解析个人利润率：`个人: <金额> <Y%>`
-                const text = rows[0].innerText;
-                const m = text.match(/个人:\\s*[\\d.]+\\s+([\\d.]+)%/);
-                return { margin, mkt_fee, personal_pct: m ? parseFloat(m[1]) : null, text };
+
+            // 按列头标题反查 colid（标题会因 SKU 变体数不同而漂移，故动态解析）
+            const colidByTitle = {};
+            for (const th of root.querySelectorAll('th')) {
+                const cid = th.getAttribute('colid');
+                const title = (th.innerText||'').trim().replace(/\\s+/g, '');
+                if (cid) colidByTitle[title] = cid;
             }
-            return { note: 'no main table' };
+            const marginCid = colidByTitle['利润($)/利润率'];
+            const feeCid = colidByTitle['活动营销费($)/占比'];
+            if (!marginCid || !feeCid) return { note: 'no 利润/活动营销费 col', colidByTitle };
+
+            const tdMargin = root.querySelector('td[colid="' + marginCid + '"]');
+            const tdFee = root.querySelector('td[colid="' + feeCid + '"]');
+            if (!tdMargin || !tdFee) return { note: 'no td for 利润/活动营销费' };
+
+            const inpMargin = tdMargin.querySelector('input');
+            const inpFee = tdFee.querySelector('input');
+            if (!inpMargin || !inpFee) return { note: 'no inputs' };
+
+            // 打 id 标记，供 fill 用
+            inpMargin.id = '__margin2__';
+            inpFee.id = '__mkt_fee__';
+
+            const margin = parseFloat(inpMargin.value);   // 公司利润率 %（当前 40）
+            const mkt_fee = parseFloat(inpFee.value);     // 活动营销费输入框原始值
+
+            // 活动营销费「占比%」= 该 cell 内 span 主数值
+            const feeSpan = tdFee.querySelector('.vxe-cell span');
+            const feePct = feeSpan ? parseFloat(feeSpan.innerText) : null;
+
+            // 个人利润率 = 利润 cell 文本里「个人: <金额> <Y%>」
+            const text = tdMargin.innerText;
+            const m = text.match(/个人:\\s*[\\d.]+\\s+([\\d.]+)%/);
+            return {
+                margin,
+                mkt_fee,
+                mkt_fee_pct: feePct,
+                personal_pct: m ? parseFloat(m[1]) : null,
+                text,
+            };
         }"""
     )
 
 
+def _blur(page) -> None:
+    """点击页面左上角空白处触发 blur，使 vxe 输入框提交值。
+
+    关键：vxe-table 的单元格 input 在 fill 后不会立即 commit，必须失焦
+    （blur）才写入数据模型；否则「重新测算」仍用旧值计算。
+    """
+    try:
+        page.locator("body").click(position={"x": 3, "y": 3})
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+
+
 def _set_company_margin(page, value: float) -> bool:
-    """用 fill 修改首行公司利润率输入框（触发 vxe 提交）。"""
+    """用 fill + blur 修改首行公司利润率输入框（触发 vxe 提交）。"""
     try:
         page.fill("#__margin2__", f"{value:.2f}")
-        page.wait_for_timeout(250)
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(200)
+        _blur(page)
         return True
     except Exception as e:
         log(f"[phase2] ✗ 设置公司利润率失败: {e}")
@@ -254,12 +288,11 @@ def _set_company_margin(page, value: float) -> bool:
 
 
 def _set_activity_marketing_rate(page, pct: float) -> bool:
-    """用 fill 修改首行活动营销费占比输入框（后缀 %，填占比数值）。"""
+    """用 fill + blur 修改首行活动营销费占比输入框（后缀 %，填占比数值）。"""
     try:
         page.fill("#__mkt_fee__", f"{pct:.2f}")
-        page.wait_for_timeout(250)
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(200)
+        _blur(page)
         return True
     except Exception as e:
         log(f"[phase2] ✗ 设置活动营销费占比失败: {e}")
@@ -371,6 +404,60 @@ def _auto_adjust_company_margin(page, config: dict) -> dict:
     return {"ok": False, "message": "利润试算未收敛"}
 
 
+def _find_target_rows(page, config: dict) -> list[int]:
+    """定位「目标品类 + 草稿（未刊登）」的行索引。
+
+    关键：上架计划页首行可能是「已刊登」或非目标品类（如 Christmas Trees），
+    这类行调低公司利润率会触发「公司利润率需高于15%」低毛利拦截。
+    只应处理「品类 = 目标品类（platform_path 末级）+ 上架状态 = 草稿」的行。
+
+    列定位（2026-08-27 勘察确认）：
+      - col_22 = 品类（如 "Wreaths, Garlands & Swags"）
+      - col_25 = 上架状态（如 "草稿"）
+    """
+    target_cat = config["category"]["platform_path"][-1]
+
+    # 轮询等待主表数据行 + 品类列渲染（vxe 虚拟滚动右侧列懒加载，需等待）
+    rows = None
+    for _ in range(30):
+        rows = page.evaluate(
+            """(targetCat) => {
+                const bodies = [...document.querySelectorAll('.vxe-table--body-wrapper')];
+                let body = bodies.sort((a,b) =>
+                    b.querySelectorAll('tr').length - a.querySelectorAll('tr').length)[0];
+                if (!body) return [];
+                const trs = [...body.querySelectorAll('tr')];
+                if (!trs.length) return [];
+                // 按列头标题反查 colid（品类/上架状态）
+                const colidByTitle = {};
+                for (const th of document.querySelectorAll('th')) {
+                    const cid = th.getAttribute('colid');
+                    const t = (th.innerText||'').trim();
+                    if (cid) colidByTitle[t] = cid;
+                }
+                const catCid = colidByTitle['品类'];
+                const statusCid = colidByTitle['上架状态'];
+                if (!catCid || !statusCid) return [];
+                const out = [];
+                trs.forEach((tr, i) => {
+                    let cellCat = '', status = '';
+                    for (const td of tr.querySelectorAll('td')) {
+                        const cid = td.getAttribute('colid');
+                        if (cid === catCid) cellCat = (td.innerText||'').trim();
+                        else if (cid === statusCid) status = (td.innerText||'').trim();
+                    }
+                    if (cellCat === targetCat && status === '草稿') out.push(i);
+                });
+                return out;
+            }""",
+            target_cat,
+        )
+        if rows:
+            break
+        page.wait_for_timeout(1000)
+    return rows or []
+
+
 def _check_price(page, config: dict, row_idx: int = 0) -> list:
     """价格/利润校验：打开利润抽屉 → 自动试算公司利润率使个人利润落目标区间（dry-run 不保存）。"""
     issues = []
@@ -445,13 +532,54 @@ def _check_price(page, config: dict, row_idx: int = 0) -> list:
         except Exception as e:
             issues.append(f"保存算价结果失败: {e}")
 
-    # 关闭抽屉
+    # 关闭抽屉：点抽屉关闭按钮（Escape 在 input 聚焦时可能只取消输入态，不关抽屉）
+    _close_profit_drawer(page)
+    return issues
+
+
+def _close_profit_drawer(page) -> None:
+    """可靠关闭利润抽屉：点关闭按钮 + Escape 兜底 + 等待遮罩消失。"""
     try:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(1500)
+        page.evaluate(
+            """() => {
+                const roots = [...document.querySelectorAll(
+                    '.el-drawer:not([style*="display: none"]), '
+                    + '.el-dialog:not([style*="display: none"])')]
+                    .filter(r => r.offsetParent !== null
+                        || r.getBoundingClientRect().width > 0);
+                const root = roots.find(r => (r.innerText||'').includes('保存算价'))
+                    || roots[0];
+                if (!root) return false;
+                // 优先点 el-drawer/el-dialog 顶部的关闭按钮
+                const closeBtn = root.querySelector(
+                    '.el-drawer__close-btn, .el-dialog__headerbtn, '
+                    + '[aria-label="Close"], [aria-label="close"]');
+                if (closeBtn) { closeBtn.click(); return true; }
+                return false;
+            }"""
+        )
     except Exception:
         pass
-    return issues
+    page.wait_for_timeout(800)
+    # Escape 兜底
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    # 等待遮罩消失
+    for _ in range(20):
+        gone = page.evaluate(
+            """() => {
+                const mask = [...document.querySelectorAll('.el-overlay, .v-modal')]
+                    .filter(m => m.getBoundingClientRect().width > 0
+                        && getComputedStyle(m).display !== 'none');
+                return mask.length === 0;
+            }"""
+        )
+        if gone:
+            break
+        page.wait_for_timeout(500)
+    page.wait_for_timeout(500)
 
 
 def _run_checks(page, config: dict) -> dict:
@@ -460,32 +588,40 @@ def _run_checks(page, config: dict) -> dict:
     report = {"image_issues": [], "price_issues": [], "ok_spus": 0, "fail_spus": 0}
 
     table = page.locator(SEL_PLAN_TABLE).first
+    # vxe-table 异步渲染，等待数据行出现（probe 因后续多次 count 累计了额外等待才读到行，
+    # 这里须显式等待，否则紧接 _open_plan_page 的 2500ms 可能不够）
+    try:
+        table.locator("tr").first.wait_for(state="attached", timeout=15000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1000)
     rows = table.locator("tr")
     total = rows.count()
     log(f"[phase2] 上架计划共 {total} 行")
 
-    for i in range(total):
-        row = rows.nth(i)
-        spu = f"SPU#{i}"
-        log(f"[phase2] 校验 {spu}...")
+    # 只处理「目标品类 + 草稿」行，跳过已刊登/非目标品类行（避免低毛利拦截）
+    target_rows = _find_target_rows(page, config)
+    target_cat = config["category"]["platform_path"][-1]
+    log(f"[phase2] 目标品类「{target_cat}」草稿行: {target_rows}（共 {len(target_rows)} 行）")
+    if not target_rows:
+        log("[phase2] ✗ 未找到目标品类草稿行")
+        return report
 
-        # 图片校验（点击行内「编辑」进入详情页——详情页结构待勘察）
-        if safe_click(row, SEL_ROW_EDIT):
-            page.wait_for_timeout(1500)
-            img_issues = _check_images(page, config)
-            if img_issues:
-                report["image_issues"].append({spu: img_issues})
-                report["fail_spus"] += 1
-            else:
-                report["ok_spus"] += 1
-            page.go_back()
-            page.wait_for_timeout(1500)
+    for i in target_rows:
+        spu = f"SPU#{i}"
+        log(f"[phase2] 校验 {spu}（目标品类草稿）...")
+
+        # 图片校验（点击行内「编辑」进入详情页——详情页结构待勘察，暂跳过）
+        # 注意：safe_click 期望 (page, selector)，此处 row 是 Locator，不可混用。
+        # 图片校验尚未勘察详情页结构，MVP 阶段跳过，聚焦价格/利润算价。
 
         # 价格校验：打开该行利润测算抽屉 → 自动试算公司利润率（_check_price 内部完成）
         price_issues = _check_price(page, config, row_idx=i)
         if price_issues:
             report["price_issues"].append({spu: price_issues})
             report["fail_spus"] += 1
+        else:
+            report["ok_spus"] += 1
 
     log(f"[phase2] 校验完成: 通过 {report['ok_spus']} / 问题 {report['fail_spus']}")
     return report
@@ -509,6 +645,7 @@ def main() -> None:
         if probe_mode:
             _probe_plan(page, config)
         else:
+            _open_plan_page(page, config)
             report = _run_checks(page, config)
             if dry_run:
                 log(f"[phase2][dry-run] 校验报告: 图片问题 {len(report['image_issues'])} / "

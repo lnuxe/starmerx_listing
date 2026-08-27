@@ -44,7 +44,7 @@
     "activity_marketing_rate": 0.50,
     "personal_profit_min": 0.04,
     "personal_profit_max": 0.06,
-    "margin_adjust_min": 0.05,
+    "margin_adjust_min": 0.02,
     "margin_adjust_max": 0.60
   },
   "safety": {
